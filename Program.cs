@@ -12,6 +12,34 @@ var users = new List<User>();
 var categories = new List<Category>();
 var records = new List<Record>();
 
+// User Endpoints
+app.MapGet("/user/{userId}", (int userId) =>
+{
+    var user = users.FirstOrDefault(u => u.Id == userId);
+    return user is not null ? Results.Ok(user) : Results.NotFound();
+});
+
+app.MapDelete("/user/{userId}", (int userId) =>
+{
+    var user = users.FirstOrDefault(u => u.Id == userId);
+    if (user is not null)
+    {
+        users.Remove(user);
+        return Results.Ok();
+    }
+    return Results.NotFound();
+});
+
+app.MapPost("/user", (User user) =>
+{
+    user.Id = users.Count > 0 ? users.Max(u => u.Id) + 1 : 1;
+    users.Add(user);
+    return Results.Created($"/user/{user.Id}", user);
+});
+
+app.MapGet("/users", () => Results.Ok(users));
+
+
 app.Run();
 
 // Models
