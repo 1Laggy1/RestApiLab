@@ -39,6 +39,63 @@ app.MapPost("/user", (User user) =>
 
 app.MapGet("/users", () => Results.Ok(users));
 
+// Category Endpoints
+app.MapGet("/category", () => Results.Ok(categories));
+
+app.MapPost("/category", (Category category) =>
+{
+    category.Id = categories.Count > 0 ? categories.Max(c => c.Id) + 1 : 1;
+    categories.Add(category);
+    return Results.Created($"/category/{category.Id}", category);
+});
+
+app.MapDelete("/category/{categoryId}", (int categoryId) =>
+{
+    var category = categories.FirstOrDefault(c => c.Id == categoryId);
+    if (category is not null)
+    {
+        categories.Remove(category);
+        return Results.Ok();
+    }
+    return Results.NotFound();
+});
+
+// Record Endpoints
+app.MapGet("/record/{recordId}", (int recordId) =>
+{
+    var record = records.FirstOrDefault(r => r.Id == recordId);
+    return record is not null ? Results.Ok(record) : Results.NotFound();
+});
+
+app.MapDelete("/record/{recordId}", (int recordId) =>
+{
+    var record = records.FirstOrDefault(r => r.Id == recordId);
+    if (record is not null)
+    {
+        records.Remove(record);
+        return Results.Ok();
+    }
+    return Results.NotFound();
+});
+
+app.MapPost("/record", (Record record) =>
+{
+    record.Id = records.Count > 0 ? records.Max(r => r.Id) + 1 : 1;
+    records.Add(record);
+    return Results.Created($"/record/{record.Id}", record);
+});
+
+app.MapGet("/record", ([Microsoft.AspNetCore.Mvc.FromQuery] int? userId, [Microsoft.AspNetCore.Mvc.FromQuery] int? categoryId) =>
+{
+    if (userId == null && categoryId == null)
+        return Results.BadRequest("Must provide user_id or category_id as filter.");
+
+    var filteredRecords = records.Where(r =>
+        (!userId.HasValue || r.UserId == userId) &&
+        (!categoryId.HasValue || r.CategoryId == categoryId)).ToList();
+
+    return Results.Ok(filteredRecords);
+});
 
 app.Run();
 
