@@ -1,109 +1,103 @@
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.Hosting;
-using Microsoft.AspNetCore.Http;
-using System.Collections.Generic;
-using System.Linq;
+using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<FinanceDbContext>(options =>
+    options.UseSqlite("Data Source=finance.db"));
+
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.Preserve;
+    });
+
 var app = builder.Build();
 
-// In-memory data
-var users = new List<User>();
-var categories = new List<Category>();
-var records = new List<Record>();
-
-// User Endpoints
-app.MapGet("/user/{userId}", (int userId) =>
+app.MapPost("/user", async (FinanceDbContext db, User user) =>
 {
-    var user = users.FirstOrDefault(u => u.Id == userId);
-    return user is not null ? Results.Ok(user) : Results.NotFound();
-});
-
-app.MapDelete("/user/{userId}", (int userId) =>
-{
-    var user = users.FirstOrDefault(u => u.Id == userId);
-    if (user is not null)
-    {
-        users.Remove(user);
-        return Results.Ok();
-    }
-    return Results.NotFound();
-});
-
-app.MapPost("/user", (User user) =>
-{
-    user.Id = users.Count > 0 ? users.Max(u => u.Id) + 1 : 1;
-    users.Add(user);
+    db.Users.Add(user);
+    await db.SaveChangesAsync();
     return Results.Created($"/user/{user.Id}", user);
 });
 
-app.MapGet("/users", () => Results.Ok(users));
-
-// Category Endpoints
-app.MapGet("/category", () => Results.Ok(categories));
-
-app.MapPost("/category", (Category category) =>
+app.MapGet("/user/{userId}", async (FinanceDbContext db, int userId) =>
 {
-    category.Id = categories.Count > 0 ? categories.Max(c => c.Id) + 1 : 1;
-    categories.Add(category);
-    return Results.Created($"/category/{category.Id}", category);
+    var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+    return user is not null ? Results.Ok(user) : Results.NotFound();
 });
 
-app.MapDelete("/category/{categoryId}", (int categoryId) =>
+app.MapPost("/deposit", async (FinanceDbContext db, int userId, decimal amount) =>
 {
-    var category = categories.FirstOrDefault(c => c.Id == categoryId);
-    if (category is not null)
-    {
-        categories.Remove(category);
-        return Results.Ok();
-    }
-    return Results.NotFound();
+    var user = await db.Users.FindAsync(userId);
+    if (user is null) return Results.NotFound();
+
+    user.Balance += amount;
+    await db.SaveChangesAsync();
+    return Results.Ok(user);
 });
 
-// Record Endpoints
-app.MapGet("/record/{recordId}", (int recordId) =>
+app.MapPost("/withdraw", async (FinanceDbContext db, int userId, decimal amount) =>
 {
-    var record = records.FirstOrDefault(r => r.Id == recordId);
-    return record is not null ? Results.Ok(record) : Results.NotFound();
+    var user = await db.Users.FindAsync(userId);
+    if (user is null) return Results.NotFound();
+
+    if (user.Balance < amount) return Results.BadRequest("Insufficient funds.");
+
+    user.Balance -= amount;
+    await db.SaveChangesAsync();
+    return Results.Ok(user);
 });
 
-app.MapDelete("/record/{recordId}", (int recordId) =>
+app.MapPost("/record", async (FinanceDbContext db, Record record) =>
 {
-    var record = records.FirstOrDefault(r => r.Id == recordId);
-    if (record is not null)
-    {
-        records.Remove(record);
-        return Results.Ok();
-    }
-    return Results.NotFound();
-});
+    var user = await db.Users.FindAsync(record.UserId);
+    if (user is null) return Results.NotFound("User not found.");
 
-app.MapPost("/record", (Record record) =>
-{
-    record.Id = records.Count > 0 ? records.Max(r => r.Id) + 1 : 1;
-    records.Add(record);
+    if (record.IsExpense && user.Balance < record.Amount)
+        return Results.BadRequest("Insufficient funds for expense.");
+
+    user.Balance += record.IsExpense ? -record.Amount : record.Amount;
+    db.Records.Add(record);
+    await db.SaveChangesAsync();
     return Results.Created($"/record/{record.Id}", record);
 });
 
-app.MapGet("/record", ([Microsoft.AspNetCore.Mvc.FromQuery] int? userId, [Microsoft.AspNetCore.Mvc.FromQuery] int? categoryId) =>
+app.MapGet("/record/{recordId}", async (FinanceDbContext db, int recordId) =>
 {
-    if (userId == null && categoryId == null)
-        return Results.BadRequest("Must provide user_id or category_id as filter.");
+    var record = await db.Records.Include(r => r.Category).FirstOrDefaultAsync(r => r.Id == recordId);
+    return record is not null ? Results.Ok(record) : Results.NotFound();
+});
 
-    var filteredRecords = records.Where(r =>
-        (!userId.HasValue || r.UserId == userId) &&
-        (!categoryId.HasValue || r.CategoryId == categoryId)).ToList();
+app.MapGet("/category/{categoryId}", async (FinanceDbContext db, int categoryId) =>
+{
+    var category = await db.Categories.FindAsync(categoryId);
+    return category is not null ? Results.Ok(category) : Results.NotFound();
+});
 
-    return Results.Ok(filteredRecords);
+app.MapPost("/category", async (FinanceDbContext db, Category category) =>
+{
+    db.Categories.Add(category);
+    await db.SaveChangesAsync();
+    return Results.Created($"/category/{category.Id}", category);
 });
 
 app.Run();
 
-// Models
+public class FinanceDbContext : DbContext
+{
+    public FinanceDbContext(DbContextOptions<FinanceDbContext> options) : base(options) { }
+
+    public DbSet<User> Users { get; set; }
+    public DbSet<Category> Categories { get; set; }
+    public DbSet<Record> Records { get; set; }
+}
+
 public class User
 {
     public int Id { get; set; }
     public string Name { get; set; }
+    public decimal Balance { get; set; }
 }
 
 public class Category
@@ -115,8 +109,10 @@ public class Category
 public class Record
 {
     public int Id { get; set; }
-    public int UserId { get; set; }
-    public int CategoryId { get; set; }
     public decimal Amount { get; set; }
-    public string Description { get; set; }
+    public bool IsExpense { get; set; }
+    public int UserId { get; set; }
+    public User User { get; set; }
+    public int? CategoryId { get; set; }
+    public Category Category { get; set; }
 }
